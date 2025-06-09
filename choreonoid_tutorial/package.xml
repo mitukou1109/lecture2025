@@ -1,31 +1,32 @@
 <?xml version="1.0"?>
-<package format="2">
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
   <name>choreonoid_tutorial</name>
   <version>1.0.0</version>
   <description>
     Tutorial on how to implement a robot controller in choreonoid
   </description>
   <maintainer email="k-kojima@jsk.imi.i.u-tokyo.ac.jp">Kunio Kojima</maintainer>
+  <maintainer email="mitukou1109@g.ecc.u-tokyo.ac.jp">Mitsuhiro Sakamoto</maintainer>
   <license>MIT</license>
   <author email="k-kojima@jsk.imi.i.u-tokyo.ac.jp">Kunio Kojima</author>
-  <url type="repository">https://github.com/agent-system/lecture2025</url>
+  <url type="repository">https://github.com/mitukou1109/lecture2025</url>
 
-  <buildtool_depend>catkin</buildtool_depend>
-  <build_depend>message_generation</build_depend>
+  <buildtool_depend>ament_cmake_auto</buildtool_depend>
+  
+  <build_depend>rosidl_default_generators</build_depend>
 
   <depend>choreonoid</depend>
-  <!-- <depend>choreonoid_ros</depend> -->
-  <!-- <depend>choreonoid_joy</depend> -->
-  <depend>roscpp</depend>
-  <depend>rospy</depend>
+  <depend>rclcpp</depend>
   <depend>std_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>trajectory_msgs</depend>
-  <!-- <depend>image_transport</depend> -->
 
-  <exec_depend>message_runtime</exec_depend>
+  <exec_depend>rosidl_default_runtime</exec_depend>
+
+  <member_of_group>rosidl_interface_packages</member_of_group>
 
   <export>
-    <build_type>cmake</build_type>
+    <build_type>ament_cmake</build_type>
   </export>
 </package>

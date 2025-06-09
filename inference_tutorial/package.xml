@@ -1,21 +1,20 @@
 <?xml version="1.0"?>
-<package format="2">
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
   <name>inference_tutorial</name>
   <version>0.0.0</version>
   <description>
     Tutorial on how to execute inference of neural networks
   </description>
   <maintainer email="k-kojima@jsk.imi.i.u-tokyo.ac.jp">Kunio Kojima</maintainer>
+  <maintainer email="mitukou1109@g.ecc.u-tokyo.ac.jp">Mitsuhiro Sakamoto</maintainer>
   <license>MIT</license>
   <author email="k-kojima@jsk.imi.i.u-tokyo.ac.jp">Kunio Kojima</author>
-  <url type="repository">https://github.com/agent-system/lecture2025</url>
+  <url type="repository">https://github.com/mitukou1109/lecture2025</url>
 
-  <buildtool_depend>catkin</buildtool_depend>
-
-  <exec_depend>python3-yaml</exec_depend>
+  <buildtool_depend>ament_cmake_auto</buildtool_depend>
 
   <export>
-    <!-- Other tools can request additional information be placed here -->
-
+    <build_type>ament_cmake</build_type>
   </export>
 </package>

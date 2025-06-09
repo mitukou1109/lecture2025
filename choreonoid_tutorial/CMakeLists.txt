@@ -1,40 +1,47 @@
-cmake_minimum_required(VERSION 3.5.0)
+cmake_minimum_required(VERSION 3.8)
 project(choreonoid_tutorial)
 
-find_package(catkin REQUIRED COMPONENTS
-  message_generation
-  roscpp
-  std_msgs
-  sensor_msgs
-  trajectory_msgs
-  # image_transport
-  choreonoid
-  )
+find_package(ament_cmake_auto REQUIRED)
+find_package(Torch REQUIRED)
 
-# generate ros messages
-add_message_files(
-  FILES
-  RobotObservation.msg
-)
+ament_auto_find_build_dependencies()
 
-generate_messages(
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/RobotObservation.msg"
   DEPENDENCIES
-  std_msgs
+    std_msgs
+    sensor_msgs
+    trajectory_msgs
+)
+
+rosidl_get_typesupport_target(${PROJECT_NAME}_cpp_typesupport
+  ${PROJECT_NAME} rosidl_typesupport_cpp)
+
+choreonoid_add_simple_controller(StandController src/StandController.cpp)
+set_target_properties(StandController PROPERTIES
+  CXX_STANDARD ${CHOREONOID_CXX_STANDARD}
+  CMAKE_CXX_EXTENSIONS OFF
+)
+
+choreonoid_add_simple_controller(ROSChoreonoidBridgeController src/ROSChoreonoidBridgeController.cpp)
+target_link_libraries(ROSChoreonoidBridgeController "${${PROJECT_NAME}_cpp_typesupport}")
+ament_target_dependencies(ROSChoreonoidBridgeController
+  rclcpp
   sensor_msgs
+  std_msgs
   trajectory_msgs
 )
-
-# catkin_package(SKIP_CMAKE_CONFIG_GENERATION SKIP_PKG_CONFIG_GENERATION)
-catkin_package(
-#  INCLUDE_DIRS include
-#  LIBRARIES actionlib_tutorial
- CATKIN_DEPENDS roscpp rospy std_msgs message_runtime
-#  DEPENDS system_lib
+set_target_properties(ROSChoreonoidBridgeController PROPERTIES
+  CXX_STANDARD ${CHOREONOID_CXX_STANDARD}
+  CMAKE_CXX_EXTENSIONS OFF
 )
 
-set(CMAKE_CXX_STANDARD ${CHOREONOID_CXX_STANDARD})
-set(CMAKE_CXX_EXTENSIONS OFF)
+# inference
+choreonoid_add_simple_controller(InferenceController src/InferenceController.cpp)
+target_link_libraries(InferenceController ${CHOREONOID_BASE_LIBRARIES} ${TORCH_LIBRARIES})
+set_target_properties(InferenceController PROPERTIES
+  CXX_STANDARD 17
+  CMAKE_CXX_EXTENSIONS OFF
+)
 
-include_directories(${catkin_INCLUDE_DIRS})
-
-add_subdirectory(src)
+ament_auto_package()

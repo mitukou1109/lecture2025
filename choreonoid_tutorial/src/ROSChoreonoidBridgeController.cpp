@@ -1,171 +1,162 @@
 #include <cnoid/SimpleController>
 #include <cnoid/EigenUtil>
-// ROS
-#include <ros/ros.h>
-#include <choreonoid_tutorial/RobotObservation.h>
-#include <sensor_msgs/JointState.h>
-#include <std_msgs/Float32MultiArray.h>
-#include <std_msgs/Int32.h>
-#include <trajectory_msgs/JointTrajectory.h>
 
-using namespace cnoid;
+#include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/joint_state.hpp>
+#include <std_msgs/msg/float32_multi_array.hpp>
+#include <std_msgs/msg/int32.hpp>
+#include <trajectory_msgs/msg/joint_trajectory.hpp>
 
-class RosChoreonoidBridgeController1 : public SimpleController
+#include "choreonoid_tutorial/msg/robot_observation.hpp"
+
+class RosChoreonoidBridgeController1 : public cnoid::SimpleController
 {
-    // ROS
-    std::unique_ptr<ros::NodeHandle> nh;
-    ros::Publisher pub;
-    ros::Subscriber sub;
-    std::unique_ptr<ros::Rate> rate;
-    // trajectory_msgs::JointTrajectory command_msg;
-    choreonoid_tutorial::RobotObservation observation_msg;
-
-    int last_received_sequence;
-    int sequence_number;
-
-    ros::Time timestamp_received, timestamp_sent;
-
-    // interfaces for a simulated body
-    Body* ioBody;
-
-    // data buffer
-    std::vector<double> q_ref;
-    std::vector<double> dq_ref;
-
-    // control timestep
-    double dt;
-
 public:
-    void callback(const trajectory_msgs::JointTrajectory::ConstPtr& msg) {
-        if (msg->header.stamp == timestamp_sent) {
-            timestamp_received = msg->header.stamp;  // 最新のシーケンス番号を保存
-            ROS_INFO("Received new data: %f", timestamp_received.toSec());
-        } else {
-            ROS_INFO("Received duplicate or out-of-order data: %f", msg->header.stamp.toSec());
-        }
-    }
-
-    virtual bool configure(SimpleControllerConfig* config) override
+  void client2ServerCallback(const trajectory_msgs::msg::JointTrajectory::ConstSharedPtr& msg)
+  {
+    const rclcpp::Time stamp = msg->header.stamp;
+    if (stamp != stamp_sent_)
     {
-        if(!ros::isInitialized()){
-            config->os() << config->controllerName()
-                         << " Call ros::init() for initializing choreonoid as ROS node" << std::endl;
-            int fake_argc = 0;
-            char** fake_argv = nullptr;
-            ros::init(fake_argc, fake_argv, "choreonoid");
-        }
-
-        nh.reset(new ros::NodeHandle);
-
-        pub = nh->advertise<choreonoid_tutorial::RobotObservation>("server2client", 1);
-        sub = nh->subscribe("client2server", 1, &RosChoreonoidBridgeController1::callback, this);
-
-        rate = std::make_unique<ros::Rate>(200); // 200Hzで通信
-
-        // initialize counter
-        last_received_sequence = -1;
-        sequence_number = 0;
-
-        return true;
+      RCLCPP_INFO(node_->get_logger(), "Received duplicate or out-of-order data: %lf", stamp.seconds());
+      return;
     }
 
-    virtual bool initialize(SimpleControllerIO* io) override
+    stamp_received_ = stamp;
+    RCLCPP_INFO(node_->get_logger(), "Received new data: %lf", stamp_received_.seconds());
+  }
+
+  bool configure(cnoid::SimpleControllerConfig* config) override
+  {
+    node_ = std::make_shared<rclcpp::Node>(config->controllerName());
+
+    server2client_pub_ = node_->create_publisher<choreonoid_tutorial::msg::RobotObservation>("server2client", 1);
+
+    client2server_sub_ = node_->create_subscription<trajectory_msgs::msg::JointTrajectory>(
+        "client2server", 1,
+        std::bind(&RosChoreonoidBridgeController1::client2ServerCallback, this, std::placeholders::_1));
+
+    executor_ = std::make_unique<rclcpp::executors::StaticSingleThreadedExecutor>();
+    executor_->add_node(node_);
+
+    control_rate_ = std::make_unique<rclcpp::Rate>(200);
+
+    return true;
+  }
+
+  bool initialize(cnoid::SimpleControllerIO* io) override
+  {
+    // initializes variables
+    io_body_ = io->body();
+
+    q_ref_.clear();
+    q_ref_.reserve(io_body_->numJoints());
+    dq_ref_.clear();
+    dq_ref_.reserve(io_body_->numJoints());
+
+    // enable joints
+    for (const auto joint : io_body_->joints())
     {
-        // initializes variables
-        dt = io->timeStep();
-        ioBody = io->body();
+      joint->setActuationMode(JointTorque);
+      io->enableOutput(joint, JointTorque);
+      io->enableInput(joint, JointAngle | JointVelocity);
 
-        q_ref.clear();
-        q_ref.reserve(ioBody->numJoints());
-        dq_ref.clear();
-        dq_ref.reserve(ioBody->numJoints());
-
-        // enable joints
-        for (auto joint : ioBody->joints()) {
-            joint->setActuationMode(JointTorque);
-            // io->enableIO(joint);
-            io->enableOutput(joint, JointTorque);
-            io->enableInput(joint, JointAngle | JointVelocity);
-
-            const double q = joint->q();
-            q_ref.push_back(q);
-            dq_ref.push_back(0); // dq reference is 0 temporally
-        }
-        // enable rootLink
-        io->enableInput(ioBody->rootLink(), LinkPosition | LinkTwist);
-
-        observation_msg.joint_states.name.resize(ioBody->numJoints());
-        observation_msg.joint_states.position.resize(ioBody->numJoints());
-        observation_msg.joint_states.velocity.resize(ioBody->numJoints());
-
-        for (int i = 0; i < ioBody->numJoints(); ++i){
-            auto joint = ioBody->joint(i);
-            observation_msg.joint_states.name[i] = joint->name();
-            observation_msg.joint_states.position[i] = joint->q();
-            observation_msg.joint_states.velocity[i] = joint->dq();
-        }
-
-        timestamp_received = ros::Time::now();
-        timestamp_sent = ros::Time::now();
-
-        return true;
+      q_ref_.push_back(joint->q());
+      dq_ref_.push_back(0);  // dq reference is 0 temporarily
     }
 
-    virtual bool control() override
+    // enable rootLink
+    io->enableInput(io_body_->rootLink(), LinkPosition | LinkTwist);
+
+    robot_observation_.joint_states.name.resize(io_body_->numJoints());
+    robot_observation_.joint_states.position.resize(io_body_->numJoints());
+    robot_observation_.joint_states.velocity.resize(io_body_->numJoints());
+
+    for (size_t i = 0; i < io_body_->numJoints(); ++i)
     {
-        const Isometry3 root_coord = ioBody->rootLink()->T();
-
-        while (ros::ok() && timestamp_sent > timestamp_received) {
-            observation_msg.header.stamp = timestamp_sent;
-
-            pub.publish(observation_msg);
-            ROS_INFO("Sent: %f", timestamp_sent.toSec());
-
-            ros::spinOnce();
-            rate->sleep();
-        }
-
-        if (timestamp_sent == timestamp_received) {
-            timestamp_sent = ros::Time::now();
-            for (int i = 0; i < ioBody->numJoints(); ++i) {
-                auto joint = ioBody->joint(i);
-                observation_msg.joint_states.name[i] = joint->name();
-                observation_msg.joint_states.position[i] = joint->q();
-                observation_msg.joint_states.velocity[i] = joint->dq();
-            }
-
-            // orientation
-            cnoid::Quaternion quaternion(root_coord.rotation());
-            observation_msg.imu.orientation.x = quaternion.x();
-            observation_msg.imu.orientation.y = quaternion.y();
-            observation_msg.imu.orientation.z = quaternion.z();
-            observation_msg.imu.orientation.w = quaternion.w();
-
-            // angular velocity
-            cnoid::Vector3 w = ioBody->rootLink()->w();
-            observation_msg.imu.angular_velocity.x = w.x();
-            observation_msg.imu.angular_velocity.y = w.y();
-            observation_msg.imu.angular_velocity.z = w.z();
-
-            // Vector3 pos = root_coord.translation();
-            // ROS_INFO("pos: %f %f %f", pos[0], pos[1], pos[2]);
-            // Vector3 rpy = rpyFromRot(root_coord.rotation());
-            // ROS_INFO("rpy: %f %f %f", rpy[0], rpy[1], rpy[2]);
-            // ROS_INFO("w: %f %f %f", angular_velocity.x(), angular_velocity.y(), angular_velocity.z());
-        }
-
-        // PD gains
-        static const double pgain = 200.0;
-        static const double dgain = 50.0;
-
-        for (int i = 0; i < ioBody->numJoints(); ++i) {
-            auto joint = ioBody->joint(i);
-            // PD control
-            const double u = (q_ref[i] - joint->q()) * pgain + (dq_ref[i] - joint->dq()) * dgain;
-            ioBody->joint(i)->u() = u;
-        }
-        return true;
+      const auto joint = io_body_->joint(i);
+      robot_observation_.joint_states.name[i] = joint->name();
+      robot_observation_.joint_states.position[i] = joint->q();
+      robot_observation_.joint_states.velocity[i] = joint->dq();
     }
+
+    stamp_received_ = stamp_sent_ = node_->now();
+
+    return true;
+  }
+
+  bool control() override
+  {
+    while (rclcpp::ok() && stamp_sent_ > stamp_received_)
+    {
+      executor_->spin_some();
+
+      robot_observation_.header.stamp = stamp_sent_;
+
+      server2client_pub_->publish(robot_observation_);
+      RCLCPP_INFO(node_->get_logger(), "Sent: %lf", stamp_sent_.seconds());
+
+      control_rate_->sleep();
+    }
+
+    if (stamp_sent_ == stamp_received_)
+    {
+      stamp_sent_ = node_->now();
+
+      for (size_t i = 0; i < io_body_->numJoints(); ++i)
+      {
+        const auto joint = io_body_->joint(i);
+        robot_observation_.joint_states.name[i] = joint->name();
+        robot_observation_.joint_states.position[i] = joint->q();
+        robot_observation_.joint_states.velocity[i] = joint->dq();
+      }
+
+      // orientation
+      cnoid::Quaternion quaternion(io_body_->rootLink()->T().rotation());
+      robot_observation_.imu.orientation.x = quaternion.x();
+      robot_observation_.imu.orientation.y = quaternion.y();
+      robot_observation_.imu.orientation.z = quaternion.z();
+      robot_observation_.imu.orientation.w = quaternion.w();
+
+      // angular velocity
+      const auto& w = io_body_->rootLink()->w();
+      robot_observation_.imu.angular_velocity.x = w.x();
+      robot_observation_.imu.angular_velocity.y = w.y();
+      robot_observation_.imu.angular_velocity.z = w.z();
+    }
+
+    for (size_t i = 0; i < io_body_->numJoints(); ++i)
+    {
+      const auto joint = io_body_->joint(i);
+      // PD control
+      const auto u = (q_ref_[i] - joint->q()) * P_GAIN + (dq_ref_[i] - joint->dq()) * D_GAIN;
+      io_body_->joint(i)->u() = u;
+    }
+
+    return true;
+  }
+
+private:
+  // PD gains
+  static constexpr auto P_GAIN = 200.0;
+  static constexpr auto D_GAIN = 50.0;
+
+  // ROS
+  rclcpp::Node::SharedPtr node_;
+  rclcpp::Publisher<choreonoid_tutorial::msg::RobotObservation>::SharedPtr server2client_pub_;
+  rclcpp::Subscription<trajectory_msgs::msg::JointTrajectory>::SharedPtr client2server_sub_;
+  rclcpp::executors::StaticSingleThreadedExecutor::UniquePtr executor_;
+  rclcpp::Rate::UniquePtr control_rate_;
+
+  choreonoid_tutorial::msg::RobotObservation robot_observation_;
+
+  rclcpp::Time stamp_received_, stamp_sent_;
+
+  // interfaces for a simulated body
+  cnoid::BodyPtr io_body_;
+
+  // data buffer
+  std::vector<double> q_ref_;
+  std::vector<double> dq_ref_;
 };
 
 CNOID_IMPLEMENT_SIMPLE_CONTROLLER_FACTORY(RosChoreonoidBridgeController1)
