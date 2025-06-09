@@ -1,0 +1,17 @@
+repositories:
+  choreonoid:
+    type: git
+    url: https://github.com/choreonoid/choreonoid.git
+    version: v2.2.0
+  lecture2025:
+    type: git
+    url: https://github.com/mitukou1109/lecture2025.git
+    version: humble
+  choreonoid/ext/vnoid:
+    type: git
+    url: https://github.com/ytazz/vnoid.git
+    version: main
+  choreonoid/ext/jaxon2_sample:
+    type: git
+    url: https://github.com/choreonoid/jaxon2-draft.git
+    version: main
